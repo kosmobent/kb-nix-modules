@@ -5,6 +5,7 @@
 #
 # Periodically pulls the latest modules from a remote Git repo, replaces the
 # local modules/ folder, rebuilds the NixOS system, and reboots.
+# Optionally runs nix-collect-garbage on the same schedule.
 #
 # Configure this module from any other .nix file:
 #
@@ -12,8 +13,14 @@
 #     enable         = true;
 #     repoDomain     = "https://github.com/YOUR_USERNAME/YOUR_REPO.git";
 #     repoBranch     = "main";       # optional, default: "main"
+#     flakeDir       = "/etc/nixos"; # optional, default: "/etc/nixos"
 #     updateInterval = "hourly";     # optional, default: "hourly"
 #     onBootDelay    = "5min";       # optional, default: "5min"
+#
+#     garbageCollect = {
+#       enable      = true;
+#       daysToKeep  = 30;            # optional, default: 30
+#     };
 #   };
 #
 # Assumptions about your flake layout:
@@ -32,7 +39,7 @@ in
   # ---------------------------------------------------------------------------
   options.custom.system.modules-auto-update = {
 
-    enable = lib.mkEnableOption "automatic NixOS config updates from Git";
+    enable = lib.mkEnableOption "automatic NixOS modules sync and rebuild from Git";
 
     repoDomain = lib.mkOption {
       type        = lib.types.str;
@@ -58,6 +65,7 @@ in
       description = ''
         Systemd calendar expression controlling how often to check for updates.
         Examples: "hourly", "daily", "*:0/30" (every 30 minutes).
+        The garbage collector (if enabled) runs on this same schedule.
       '';
     };
 
@@ -65,6 +73,20 @@ in
       type        = lib.types.str;
       default     = "5min";
       description = "How long after boot to wait before the first update check.";
+    };
+
+    garbageCollect = {
+
+      enable = lib.mkEnableOption "periodic nix-collect-garbage on the same schedule as the updater";
+
+      daysToKeep = lib.mkOption {
+        type        = lib.types.int;
+        default     = 30;
+        description = ''
+          Delete Nix store paths older than this many days.
+          Passed to nix-collect-garbage as --delete-older-than <n>d.
+        '';
+      };
     };
   };
 
@@ -77,8 +99,11 @@ in
       "d /var/lib/kb-nix-modules-auto-update 0700 root root -"
     ];
 
+    # -------------------------------------------------------------------------
+    # Modules sync + rebuild service
+    # -------------------------------------------------------------------------
     systemd.services.kb-nix-modules-auto-update = {
-      description = "NixOS automatic config update from Git";
+      description = "Sync NixOS modules from Git and rebuild";
       after       = [ "network-online.target" ];
       wants       = [ "network-online.target" ];
 
@@ -150,7 +175,7 @@ in
     };
 
     systemd.timers.kb-nix-modules-auto-update = {
-      description = "NixOS automatic config update timer";
+      description = "NixOS modules auto-update timer";
       wantedBy    = [ "timers.target" ];
       timerConfig = {
         OnCalendar         = cfg.updateInterval;
@@ -158,6 +183,39 @@ in
         Persistent         = true;
         RandomizedDelaySec = "3min";
         Unit               = "kb-nix-modules-auto-update.service";
+      };
+    };
+
+    # -------------------------------------------------------------------------
+    # Garbage collection service (independent of commit changes)
+    # -------------------------------------------------------------------------
+    systemd.services.kb-nix-modules-auto-update-gc = lib.mkIf cfg.garbageCollect.enable {
+      description = "Nix garbage collection (kb-nix-modules-auto-update)";
+
+      serviceConfig = {
+        Type           = "oneshot";
+        User           = "root";
+        StandardOutput = "journal";
+        StandardError  = "journal";
+      };
+
+      script = ''
+        set -euo pipefail
+        echo "[kb-nix-modules-auto-update-gc] Running nix-collect-garbage --delete-older-than ${toString cfg.garbageCollect.daysToKeep}d ..."
+        ${pkgs.nix}/bin/nix-collect-garbage --delete-older-than ${toString cfg.garbageCollect.daysToKeep}d
+        echo "[kb-nix-modules-auto-update-gc] Garbage collection complete."
+      '';
+    };
+
+    systemd.timers.kb-nix-modules-auto-update-gc = lib.mkIf cfg.garbageCollect.enable {
+      description = "Nix garbage collection timer (kb-nix-modules-auto-update)";
+      wantedBy    = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar         = cfg.updateInterval;
+        OnBootSec          = cfg.onBootDelay;
+        Persistent         = true;
+        RandomizedDelaySec = "3min";
+        Unit               = "kb-nix-modules-auto-update-gc.service";
       };
     };
   };
