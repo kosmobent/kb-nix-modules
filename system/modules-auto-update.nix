@@ -28,6 +28,17 @@
 #   ├── flake.nix          ← lives here, NOT in the repo
 #   ├── flake.lock
 #   └── modules/           ← contents are fully managed by this module
+#
+# To run:
+# sudo systemctl start kb-nix-modules-auto-update.service
+# sudo journalctl -fu 4ules-auto-update.service
+# sudo journalctl -u kb-nix-modules-auto-update.service -e
+#
+# sudo rm /var/lib/kb-nix-modules-auto-update/last-commit
+# sudo systemctl start kb-nix-modules-auto-update.service
+#
+# sudo systemctl start kb-nix-modules-auto-update-gc.service
+# sudo journalctl -fu kb-nix-modules-auto-update-gc.service
 # =============================================================================
 
 let
@@ -162,10 +173,10 @@ in
             "$WORK_DIR/repo/" \
             "$MODULES_DIR/"
 
-          echo "[kb-nix-modules-auto-update] Sync complete. Running nixos-rebuild switch..."
+          echo "[kb-nix-modules-auto-update] Sync complete. Running nixos-rebuild boot..."
 
-          ${pkgs.nixos-rebuild}/bin/nixos-rebuild switch \
-            --flake "$FLAKE_DIR#$(${pkgs.hostname}/bin/hostname)" 2>&1
+          ${pkgs.nixos-rebuild}/bin/nixos-rebuild boot \
+            --flake "$FLAKE_DIR#nixos" 2>&1
 
           echo "$NEW_COMMIT" > "$LAST_COMMIT_FILE"
 
